@@ -1,0 +1,304 @@
+import tensorflow as tf 
+from tensorflow.keras.preprocessing.image import ImageDataGenerator  
+import matplotlib.pyplot as plt
+from keras.layers import *
+from keras.models import *
+from tensorflow import keras
+from sklearn.metrics import confusion_matrix, accuracy_score, classification_report, roc_curve
+from sklearn.model_selection import train_test_split, KFold, cross_val_score, StratifiedKFold, learning_curve, GridSearchCV
+from keras.utils.np_utils import to_categorical
+import seaborn as sns
+
+import pandas as pd
+import numpy as np
+
+data1 = np.load("x.npy")
+data2 = np.load("y.npy")
+
+data1.shape
+data2.shape
+
+def describeData(a,b):
+    print('Total number of images: {}'.format(len(a)))
+    print('Number of IDC(-) Images: {}'.format(np.sum(b==0)))
+    print('Number of IDC(+) Images: {}'.format(np.sum(b==1)))
+    print('Percentage of positive images: {:.2f}%'.format(100*np.mean(b)))
+    print('Image shape (Width, Height, Channels): {}'.format(a[0].shape))
+describeData(data1, data2)
+
+imgs0 = data1[data2==0] # (0 means IDC is not present, 1 means IDC is present)
+imgs1 = data1[data2==1] 
+
+def plotTwo(a,b): 
+    for row in range(3):
+        plt.figure(figsize=(20, 10))
+        for col in range(3):
+            plt.subplot(1,8,col+1)
+            plt.title('IDC (-)')
+            plt.imshow(a[row+col])
+            plt.axis('off')       
+            plt.subplot(1,8,col+4)
+            plt.title('IDC (+)')
+            plt.imshow(b[row+col])
+            plt.axis('off')
+plotTwo(imgs0, imgs1) 
+
+from sklearn.model_selection import train_test_split
+X_train, X_test, Y_train, Y_test = train_test_split(data1, data2, test_size=0.2, random_state = 42)
+
+# Shrink sample size of the dataset
+X_train = X_train[0:30000] 
+Y_train = Y_train[0:30000]
+X_test = X_test[0:30000] 
+Y_test = Y_test[0:30000]
+
+# Normalize the data
+X_train = X_train / 256.0
+X_test = X_test / 256.0
+
+trainnumber = X_train.shape[0]
+trainnumber = X_test.shape[0]
+
+print("Shape of training data:", X_train.shape, X_train.shape)
+print("Shape of testing data:", X_test.shape, X_test.shape)
+
+# Perform one-hot encoding
+classnumber = 2
+
+Y_train = to_categorical(Y_train, num_classes = 2)
+Y_test = to_categorical(Y_test, num_classes = 2)
+
+print(X_train.shape, Y_train.shape, X_test.shape, Y_test.shape)
+
+input_shape = X_train.shape[1:]
+
+from tensorflow.keras.callbacks import EarlyStopping
+
+def runCNN(a,b,c,d):
+    batch_size = 128
+    num_classes = 2
+    epochs = 12  
+    img_rows, img_cols = X_train.shape[1],X_train.shape[2]
+    input_shape = (img_rows, img_cols, 3)
+    x_train = a
+    y_train = b
+    x_test = c
+    y_test = d   
+    
+    callback = EarlyStopping(monitor='loss', patience=3)
+    
+    seed = 1234
+    np.random.seed(seed)
+    
+    model = Sequential()
+    model.add(Conv2D(32, kernel_size=(3, 3),
+                     activation='relu',
+                     input_shape=input_shape))
+    model.add(Conv2D(64, (3, 3), activation='relu'))
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+    model.add(Dropout(0.25))
+    model.add(Flatten())
+    model.add(Dense(128, activation='relu'))
+    model.add(Dropout(0.5))
+    model.add(Dense(num_classes, activation='softmax'))
+    model.compile(loss=keras.losses.categorical_crossentropy,
+                  optimizer=keras.optimizers.Adadelta(),
+                  metrics=['accuracy'])
+    model.fit(x_train, y_train,
+              batch_size=batch_size,
+              verbose=1,
+              epochs=epochs,
+              validation_data=(x_test, y_test),
+              callbacks=[callback])
+    
+    score = model.evaluate(x_test, y_test, verbose=0)
+    print('\nKeras CNN Accuracy:', score[1],'\n')
+    y_pred = model.predict(c) 
+    map_characters = {0: 'IDC(-)', 1: 'IDC(+)'}
+    
+    print('\n', classification_report(np.where(d > 0)[1], np.argmax(y_pred, axis=1), target_names=list(map_characters.values())), sep='')
+    Y_pred_classes = np.argmax(y_pred,axis = 1) 
+    Y_true = np.argmax(Y_test,axis = 1) 
+    
+    confusion_mtx = confusion_matrix(Y_true, Y_pred_classes)
+    sns.heatmap(confusion_mtx, annot = True)
+    plt.show()
+    
+    model.summary()
+
+    from sklearn.metrics import roc_curve, auc
+
+    y_score = model.predict(X_test)
+
+    fpr = dict()
+    tpr = dict()
+    roc_auc = dict()
+    for i in range(num_classes):
+        fpr[i], tpr[i], _ = roc_curve(y_test[:, i], y_score[:, i])
+        roc_auc[i] = auc(fpr[i], tpr[i])
+        
+    # Plot the ROC curve
+    for i in range(num_classes):
+        plt.figure()
+        plt.plot(fpr[i], tpr[i], label='ROC curve (area = %0.2f)' % roc_auc[i])
+        plt.plot([0, 1], [0, 1], 'k--')
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('Receiver operating characteristic (ROC curve)')
+        plt.legend(loc="lower right")
+        plt.show()
+
+runCNN(X_train, Y_train,  X_test, Y_test)
+
+import cv2
+
+def resize_img(img):
+    Imagenumbers = img.shape[0]
+    image_array = np.zeros((Imagenumbers, 64,64,3))
+    for i in range(Imagenumbers):
+        image_array[i] = cv2.resize(img[i,:,:,:],(64,64))
+    return image_array
+
+X_train = resize_img(X_train)
+X_test = resize_img(X_test)
+print("dimension of x_train: ",X_train.shape)
+
+import warnings
+warnings.filterwarnings('ignore')
+from keras.applications.vgg19 import VGG19
+import cv2
+from keras.layers import Dense, Flatten
+import numpy as np
+from tensorflow.keras.utils import to_categorical
+
+#Normalization of data
+data1 = data1 / 255.0
+print("Data 1 Shape:", data1.shape)
+
+trainnumber = X_train.shape[0]
+testnumber = X_test.shape[0]
+X_train.shape
+
+X_train = X_train.reshape(trainnumber,X_train.shape[1]*X_train.shape[2]*X_train.shape[3])
+X_test = X_test.reshape(testnumber,X_test.shape[1]*X_test.shape[2]*X_test.shape[3])
+
+print("X Train: ",X_train.shape)
+print("X Test: ",X_test.shape)
+
+from keras.wrappers.scikit_learn import KerasClassifier
+from sklearn.model_selection import cross_val_score
+from keras.models import Sequential
+from keras.layers import Dense
+
+def buildclassifier():
+    classifier = Sequential() 
+    classifier.add(Dense(units = 8, kernel_initializer = 'uniform', activation = 'relu', input_dim = X_train.shape[1]))
+    classifier.add(Dense(units = 8, kernel_initializer = 'uniform', activation = 'relu'))
+    classifier.add(Dense(units = 1, kernel_initializer = 'uniform', activation = 'sigmoid'))
+    classifier.compile(optimizer = 'adam', loss = 'binary_crossentropy', metrics = ['accuracy'])
+    return classifier
+    
+from sklearn.model_selection import train_test_split
+
+xtrain, xtest, ytrain, ytest = train_test_split(data1, data2, test_size = 0.2, random_state=2)
+trainnumber = xtrain.shape[0]
+testnumber = xtest.shape[0]
+xtrain.shape
+
+classnumber = 2
+
+ytrain = to_categorical(ytrain, classnumber)
+ytest = to_categorical(ytest, classnumber)
+
+input_shape = xtrain.shape[1:]
+
+def resize_img(img):
+    numberOfImage = img.shape[0]
+    new_array = np.zeros((numberOfImage, 64,64,3))
+    for i in range(numberOfImage):
+        new_array[i] = cv2.resize(img[i,:,:,:],(64,64))
+    return new_array
+
+xtrain = resize_img(xtrain)
+xtest = resize_img(xtest)
+print("dimension of x_train: ",xtrain.shape)
+
+vgg = VGG19(include_top = False, weights = "imagenet", input_shape = (64,64,3))
+
+print(vgg.summary())
+
+vgg_layer_list = vgg.layers
+
+model = Sequential()
+for layer in vgg_layer_list:
+    model.add(layer)
+    
+print(model.summary())
+
+for layer in model.layers:
+    layer.trainable = False
+
+model.add(Flatten())
+model.add(Dense(128))
+model.add(Dense(128))
+model.add(Dense(classnumber, activation= "sigmoid"))
+
+print(model.summary())
+
+model.compile(loss = "binary_crossentropy",
+              optimizer = "rmsprop",
+              metrics = ["accuracy"])
+              
+hist = model.fit(xtrain, ytrain, validation_split = 0.3, epochs = 10, batch_size = 1000)
+
+score = model.evaluate(xtest, ytest, verbose=0)
+print('\nVGG-19 accuracy:', score[1],'\n')
+ypred = model.predict(xtest) 
+map_characters = {0: 'IDC(-)', 1: 'IDC(+)'}
+    
+print('\n', classification_report(np.where(ytest > 0)[1], np.argmax(ypred, axis=1), target_names=list(map_characters.values())), sep='')
+ypredclasses = np.argmax(ypred,axis = 1) 
+ytrue = np.argmax(ytest,axis = 1) 
+    
+confusion_mtx = confusion_matrix(ytrue, ypredclasses)
+sns.heatmap(confusion_mtx, annot = True)
+plt.show()
+
+plt.title('Loss for VGG-19')
+plt.plot(hist.history["loss"], label = "train loss")
+plt.plot(hist.history["val_loss"], label = "val loss")
+plt.legend()
+plt.show()
+
+plt.figure()
+plt.title('Accuracy for VGG-19')
+plt.plot(hist.history["accuracy"], label = "train acc")
+plt.plot(hist.history["val_accuracy"], label = "val acc")
+plt.legend()
+plt.show()
+
+from sklearn.metrics import roc_curve, auc
+
+y_score = model.predict(xtest)
+
+fpr = dict()
+tpr = dict()
+roc_auc = dict()
+for i in range(classnumber):
+    fpr[i], tpr[i], _ = roc_curve(ytest[:, i], y_score[:, i])
+    roc_auc[i] = auc(fpr[i], tpr[i])
+    
+    # Plot the ROC curve
+for i in range(classnumber):
+    plt.figure()
+    plt.plot(fpr[i], tpr[i], label='ROC curve (area = %0.2f)' % roc_auc[i])
+    plt.plot([0, 1], [0, 1], 'k--')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.title("Receiver operating characteristic (ROC curve)")
+    plt.legend(loc="lower right")
+    plt.show()
